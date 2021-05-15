@@ -31,11 +31,11 @@
 #include <vector>
 
 #include <NvInferPlugin.h>
+#include "model_config.pb.h"
 #include "src/backends/tensorrt/logging.h"
 #include "src/core/constants.h"
 #include "src/core/filesystem.h"
 #include "src/core/logging.h"
-#include "model_config.pb.h"
 #include "src/core/model_config_utils.h"
 
 namespace nvidia { namespace inferenceserver {
@@ -43,7 +43,7 @@ namespace nvidia { namespace inferenceserver {
 Status
 PlanBackendFactory::Create(
     const std::shared_ptr<BackendConfig>& backend_config,
-    std::unique_ptr<PlanBackendFactory>* factory)
+    const NumaConfig& numa_config, std::unique_ptr<PlanBackendFactory>* factory)
 {
   LOG_VERBOSE(1) << "Create PlanBackendFactory";
 
@@ -62,7 +62,7 @@ PlanBackendFactory::Create(
   }
 
   auto plan_backend_config = std::static_pointer_cast<Config>(backend_config);
-  factory->reset(new PlanBackendFactory(plan_backend_config));
+  factory->reset(new PlanBackendFactory(plan_backend_config, numa_config));
   return Status::Success;
 }
 
@@ -91,7 +91,7 @@ PlanBackendFactory::CreateBackend(
       new PlanBackend(min_compute_capability));
   RETURN_IF_ERROR(
       local_backend->Init(path, model_config, kTensorRTPlanPlatform));
-  RETURN_IF_ERROR(local_backend->CreateExecutionContexts(models));
+  RETURN_IF_ERROR(local_backend->CreateExecutionContexts(models, numa_config_));
 
   *backend = std::move(local_backend);
   return Status::Success;
