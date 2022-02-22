@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright (c) 2020-2021, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# Copyright 2020-2022, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions
@@ -80,14 +80,18 @@ from distutils.dir_util import copy_tree
 # library. In other words, when the second element of the pair is not None.
 # To use ('2021.2', None) version_str should be `2021_2'.
 # To use ('2021.4', '2021.4.582') version_str should be `2021_4_pre'.
+# User can also build openvino backend from specific commit sha of openVINO
+# repository. The pair should be (`SPECIFIC`, <commit_sha_of_ov_repo>).
+# Note: Not all sha ids would successfuly compile and work.
 #
 TRITON_VERSION_MAP = {
-    '2.19.0dev': (
-        '22.02dev',  # triton container
+    '2.20.0dev': (
+        '22.03dev',  # triton container
         '22.01',  # upstream container
         '1.10.0',  # ORT
         '2021.2.200',  # ORT OpenVINO
-        (('2021.2', None), ('2021.4', '2021.4.582')),  # Standalone OpenVINO
+        (('2021.2', None), ('2021.4', '2021.4.582'),
+         ('SPECIFIC', 'f2f281e6')),  # Standalone OpenVINO
         '2.2.9')  # DCGM version
 }
 
@@ -527,6 +531,10 @@ def pytorch_cmake_args(images):
 
     # If platform is jetpack do not use docker based build
     if target_platform() == 'jetpack':
+        if 'pytorch' not in library_paths:
+            raise Exception(
+                "Must specify library path for pytorch using --library-paths=pytorch:<path_to_pytorch>"
+            )
         pt_lib_path = library_paths['pytorch'] + "/lib"
         pt_include_paths = ""
         for suffix in [
@@ -572,6 +580,10 @@ def onnxruntime_cmake_args(images, library_paths):
 
     # If platform is jetpack do not use docker based build
     if target_platform() == 'jetpack':
+        if 'onnxruntime' not in library_paths:
+            raise Exception(
+                "Must specify library path for onnxruntime using --library-paths=onnxruntime:<path_to_onnxruntime>"
+            )
         ort_lib_path = library_paths['onnxruntime'] + "/lib"
         ort_include_path = library_paths['onnxruntime'] + "/include"
         cargs += [
@@ -615,17 +627,30 @@ def onnxruntime_cmake_args(images, library_paths):
 
 
 def openvino_cmake_args(be, variant_index):
+    using_specific_commit_sha = False
+    if TRITON_VERSION_MAP[FLAGS.version][4][variant_index][0] == 'SPECIFIC':
+        using_specific_commit_sha = True
+
     ov_version = TRITON_VERSION_MAP[FLAGS.version][4][variant_index][1]
     if ov_version:
-        use_prebuilt_ov = True
+        if using_specific_commit_sha:
+            use_prebuilt_ov = False
+        else:
+            use_prebuilt_ov = True
     else:
         # If the OV package version is None, then we are not using prebuilt package
         ov_version = TRITON_VERSION_MAP[FLAGS.version][4][variant_index][0]
         use_prebuilt_ov = False
-    cargs = [
-        cmake_backend_arg(be, 'TRITON_BUILD_OPENVINO_VERSION', None,
-                          ov_version),
-    ]
+    if using_specific_commit_sha:
+        cargs = [
+            cmake_backend_arg(be, 'TRITON_BUILD_OPENVINO_COMMIT_SHA', None,
+                              ov_version),
+        ]
+    else:
+        cargs = [
+            cmake_backend_arg(be, 'TRITON_BUILD_OPENVINO_VERSION', None,
+                              ov_version),
+        ]
     cargs.append(
         cmake_backend_arg(be, 'TRITON_OPENVINO_BACKEND_INSTALLDIR', None, be))
     if target_platform() == 'windows':
@@ -672,6 +697,10 @@ def tensorflow_cmake_args(ver, images, library_paths):
                 cmake_backend_arg(backend_name, 'TRITON_TENSORFLOW_LIB_PATHS',
                                   None, library_paths[backend_name])
             ]
+        else:
+            raise Exception(
+                f"Must specify library path for {backend_name} using --library-paths={backend_name}:<path_to_{backend_name}>"
+            )
     else:
         # If a specific TF image is specified use it, otherwise pull from NGC.
         if backend_name in images:
@@ -1405,9 +1434,12 @@ def build_backend(be,
 def get_tagged_backend(be, version):
     tagged_be = be
     if be == 'openvino':
-        tagged_be += "_" + version[0].replace('.', '_')
-        if version[1] and target_platform() != 'windows':
-            tagged_be += "_pre"
+        if version[0] == 'SPECIFIC':
+            tagged_be += "_" + version[1]
+        else:
+            tagged_be += "_" + version[0].replace('.', '_')
+            if version[1] and target_platform() != 'windows':
+                tagged_be += "_pre"
     return tagged_be
 
 

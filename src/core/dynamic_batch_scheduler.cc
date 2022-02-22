@@ -549,6 +549,17 @@ DynamicBatchScheduler::GetDynamicBatch()
     next_preferred_batch_size_ -= payload_batch_size;
   }
 
+  // By this point, we have not seen the pending batch that should be executed
+  // immediately. However, if we have scheduled a payload that can be grown and
+  // not yet in preferred batch size, we should move the pending batch over to
+  // ensure the model instance will pick up largest available batch even if it
+  // is not the preferred batch.
+  if (!payload_saturated_ && (payload_batch_size != 0) &&
+      (preferred_batch_sizes_.find(payload_batch_size) ==
+       preferred_batch_sizes_.end())) {
+    return 0;
+  }
+
   uint64_t wait_ns = pending_batch_delay_ns_ - delay_ns;
   // Note that taking request timeout into consideration allows us to reset
   // pending batch as soon as it is invalidated. But the cost is that in edge
@@ -578,6 +589,7 @@ void
 DynamicBatchScheduler::DelegateResponse(
     std::unique_ptr<InferenceRequest>& request)
 {
+  std::lock_guard<std::mutex> lock(completion_queue_mtx_);
   completion_queue_.emplace_back();
   auto queue_slot = &completion_queue_.back();
   uint64_t request_hash = request->CacheKey();
@@ -590,7 +602,10 @@ DynamicBatchScheduler::DelegateResponse(
         }
 
         if (preserve_ordering_) {
-          queue_slot->emplace_back(std::move(response), flags);
+          {
+            std::lock_guard<std::mutex> lock(completion_queue_mtx_);
+            queue_slot->emplace_back(std::move(response), flags);
+          }
           FinalizeResponses();
         } else {
           InferenceResponse::Send(std::move(response), flags);
@@ -638,6 +653,7 @@ DynamicBatchScheduler::FinalizeResponses()
   std::deque<std::pair<std::unique_ptr<InferenceResponse>, const uint32_t>>
       responses;
   {
+    std::lock_guard<std::mutex> queue_lock(completion_queue_mtx_);
     while (!completion_queue_.empty() && !completion_queue_.front().empty()) {
       bool response_complete = false;
       for (auto& response_pair : completion_queue_.front()) {
