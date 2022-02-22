@@ -112,6 +112,65 @@ SagemakerAPIServer::Handle(evhtp_request_t* req)
     return;
   }
 
+  std::string multi_model_name, action;
+  if (RE2::FullMatch(
+          std::string(req->uri->path->full), models_regex_, &multi_model_name, &action)) {
+
+    switch (req->method) {
+    case htp_method_GET:
+      if (multi_model_name.empty()) {
+        // LIST ALL MODELS
+        /*
+          1. Convert response to SageMaker format
+          2. Add Pagination support
+        */
+        LOG_VERBOSE(1) << "SageMaker request: LIST ALL MODELS";
+        req->method = htp_method_POST;
+        HandleRepositoryIndex(req, "");
+        return;
+      }
+      // GET MODEL
+      LOG_VERBOSE(1) << "SageMaker request: GET MODEL";
+      /* code: No corresponding KFServe/Triton API */
+      return;
+    case htp_method_POST:
+      if (action == "/invoke") {
+        // INVOKE MODEL
+        /*
+          1. Check if any changes required for SageMaker "X-Amzn-SageMaker-Target-Model" header
+          2. Return 404 if model is not loaded
+        */
+        LOG_VERBOSE(1) << "SageMaker request: INVOKE MODEL";
+        HandleInfer(req, multi_model_name, model_version_str_);
+        return;
+      }
+      if (action.empty()) {
+        // LOAD MODEL
+        /*
+          1. Triton doesn't send a response on successful load SM expects a response object 
+          2. Load model status codes 409: Already loaded; 507: Can't load due to resource constraint
+        */
+        LOG_VERBOSE(1) << "SageMaker request: LOAD MODEL";
+        req->method = htp_method_POST;
+        HandleRepositoryControl(req, "", multi_model_name, "load");
+        return;
+      }
+      break;
+    case htp_method_DELETE:
+      // UNLOAD MODEL
+      LOG_VERBOSE(1) << "SageMaker request: UNLOAD MODEL";
+      req->method = htp_method_POST;
+      HandleRepositoryControl(req, "", multi_model_name, "unload");
+      return;
+    default:
+      LOG_VERBOSE(1) << "SageMaker error: " << req->method << " "
+                     << req->uri->path->full << " - "
+                     << static_cast<int>(EVHTP_RES_BADREQ);
+      evhtp_send_reply(req, EVHTP_RES_BADREQ);
+      return;
+    }
+  }
+
   LOG_VERBOSE(1) << "SageMaker error: " << req->method << " "
                  << req->uri->path->full << " - "
                  << static_cast<int>(EVHTP_RES_BADREQ);
